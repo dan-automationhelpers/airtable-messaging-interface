@@ -44,6 +44,14 @@ function SMSInterface() {
     const [editingId, setEditingId] = useState(null);
     const [newName, setNewName] = useState('');
     const [newMessageEdit, setNewMessageEdit] = useState('');
+    const [showVariablePicker, setShowVariablePicker] = useState(false);
+    const [variableQuery, setVariableQuery] = useState("");
+    const [showVariableAutocomplete, setShowVariableAutocomplete] = useState(false);
+    const [variableAutocompleteQuery, setVariableAutocompleteQuery] = useState("");
+    const [cursorPosition, setCursorPosition] = useState(0);
+    const [showTemplateAutocomplete, setShowTemplateAutocomplete] = useState(false);
+    const [templateAutocompleteQuery, setTemplateAutocompleteQuery] = useState("");
+    const [messageCursorPosition, setMessageCursorPosition] = useState(0);
     
     // Templates table integration
     const templates = globalConfig.get('templates') || [];
@@ -52,6 +60,62 @@ function SMSInterface() {
     const filteredTemplates = templateQuery
         ? templates.filter(r => (r.name || '').toLowerCase().startsWith(templateQuery.toLowerCase()))
         : [];
+    
+    // Filtered templates for new autocomplete system
+    const filteredTemplateAutocomplete = templateAutocompleteQuery
+        ? templates.filter(template => 
+            (template.name || '').toLowerCase().includes(templateAutocompleteQuery.toLowerCase()) ||
+            (template.message || '').toLowerCase().includes(templateAutocompleteQuery.toLowerCase())
+          )
+        : templates;
+    
+    // Get available fields from Clients table for variables
+    const availableFields = clientsTable ? clientsTable.fields.map(field => ({
+        id: field.id,
+        name: field.name,
+        type: field.type
+    })) : [];
+    
+    // Filtered fields for variable picker
+    const filteredFields = variableQuery
+        ? availableFields.filter(field => 
+            field.name.toLowerCase().includes(variableQuery.toLowerCase()) ||
+            normalizeFieldName(field.name).toLowerCase().includes(variableQuery.toLowerCase())
+          )
+        : availableFields;
+    
+    // Filtered fields for autocomplete
+    const filteredAutocompleteFields = variableAutocompleteQuery
+        ? availableFields.filter(field => 
+            field.name.toLowerCase().includes(variableAutocompleteQuery.toLowerCase()) ||
+            normalizeFieldName(field.name).toLowerCase().includes(variableAutocompleteQuery.toLowerCase())
+          )
+        : availableFields;
+    
+    // Function to normalize field names (remove spaces, emojis, punctuation)
+    const normalizeFieldName = (fieldName) => {
+        if (!fieldName) return '';
+        return fieldName
+            .replace(/[\s\p{P}\p{Emoji}]/gu, '') // Remove spaces, punctuation, and emojis
+            .replace(/[^\w]/g, '') // Remove any remaining non-word characters
+            .replace(/^(\d)/, '_$1'); // Add underscore prefix if starts with number
+    };
+    
+    // Function to resolve variables in a template message
+    const resolveTemplateVariables = (templateText, clientRecord) => {
+        if (!templateText || !clientRecord) return templateText;
+        
+        // Replace @FieldName with actual field values
+        return templateText.replace(/@([a-zA-Z0-9_]+)/g, (match, normalizedFieldName) => {
+            // Find the field by matching normalized names
+            const field = availableFields.find(f => normalizeFieldName(f.name) === normalizedFieldName);
+            if (field) {
+                const fieldValue = clientRecord.getCellValue(field.name);
+                return fieldValue || match; // Return original if field value is empty
+            }
+            return match; // Return original if field not found
+        });
+    };
     
     // Add debug log
     const addDebugLog = (message, data = null) => {
@@ -370,24 +434,114 @@ function SMSInterface() {
     // Handle textarea input for @ autocomplete
     const handleInput = (e) => {
         const value = e.target.value;
+        const cursorPos = e.target.selectionStart;
         setNewMessage(value);
-        // Find last @ and get the word after it
-        const match = value.match(/@([a-zA-Z]*)$/);
+        setMessageCursorPosition(cursorPos);
+        
+        // Find the word being typed at cursor position
+        const beforeCursor = value.substring(0, cursorPos);
+        const match = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
+        
         if (match) {
-            setTemplateQuery(match[1]);
-            setShowAutocomplete(true);
-        } else {
-            setTemplateQuery("");
+            setTemplateAutocompleteQuery(match[1]);
+            setShowTemplateAutocomplete(true);
+            // Hide the old autocomplete
             setShowAutocomplete(false);
+            setTemplateQuery("");
+        } else {
+            setTemplateAutocompleteQuery("");
+            setShowTemplateAutocomplete(false);
         }
+    };
+    
+    // Handle template editor textarea input for variable autocomplete
+    const handleTemplateEditorInput = (e) => {
+        const value = e.target.value;
+        const cursorPos = e.target.selectionStart;
+        setNewMessageEdit(value);
+        setCursorPosition(cursorPos);
+        
+        // Find the word being typed at cursor position
+        const beforeCursor = value.substring(0, cursorPos);
+        const match = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
+        
+        if (match) {
+            setVariableAutocompleteQuery(match[1]);
+            setShowVariableAutocomplete(true);
+        } else {
+            setVariableAutocompleteQuery("");
+            setShowVariableAutocomplete(false);
+        }
+    };
+    
+    // Handle variable autocomplete selection
+    const handleVariableAutocompleteSelect = (field) => {
+        const beforeCursor = newMessageEdit.substring(0, cursorPosition);
+        const afterCursor = newMessageEdit.substring(cursorPosition);
+        
+        // Find the start of the @ variable being typed
+        const beforeMatch = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
+        if (beforeMatch) {
+            const startPos = beforeCursor.lastIndexOf('@');
+            const newValue = newMessageEdit.substring(0, startPos) + 
+                           `@${normalizeFieldName(field.name)}` + 
+                           afterCursor;
+            
+            setNewMessageEdit(newValue);
+            
+            // Set cursor position after the inserted variable
+            const newCursorPos = startPos + normalizeFieldName(field.name).length + 1; // +1 for @
+            setTimeout(() => {
+                const textarea = document.querySelector('textarea[value="' + newValue + '"]');
+                if (textarea) {
+                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                    textarea.focus();
+                }
+            }, 0);
+        }
+        
+        setShowVariableAutocomplete(false);
+        setVariableAutocompleteQuery("");
     };
     
     // Handle template selection from autocomplete
     const handleTemplateSelect = (template) => {
         if (!selectedClient) return;
-        setNewMessage(prev => prev.replace(/@([a-zA-Z]*)$/, template.message));
+        const resolvedMessage = resolveTemplateVariables(template.message, selectedClient);
+        setNewMessage(prev => prev.replace(/@([a-zA-Z]*)$/, resolvedMessage));
         setShowAutocomplete(false);
         setTemplateQuery("");
+    };
+    
+    // Handle template autocomplete selection in messaging UI
+    const handleTemplateAutocompleteSelect = (template) => {
+        if (!selectedClient) return;
+        
+        const beforeCursor = newMessage.substring(0, messageCursorPosition);
+        const afterCursor = newMessage.substring(messageCursorPosition);
+        
+        // Find the start of the @ template being typed
+        const beforeMatch = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
+        if (beforeMatch) {
+            const startPos = beforeCursor.lastIndexOf('@');
+            const resolvedMessage = resolveTemplateVariables(template.message, selectedClient);
+            const newValue = newMessage.substring(0, startPos) + resolvedMessage + afterCursor;
+            
+            setNewMessage(newValue);
+            
+            // Set cursor position after the inserted template
+            const newCursorPos = startPos + resolvedMessage.length;
+            setTimeout(() => {
+                const textarea = document.querySelector('textarea[placeholder="Type your message..."]');
+                if (textarea) {
+                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                    textarea.focus();
+                }
+            }, 0);
+        }
+        
+        setShowTemplateAutocomplete(false);
+        setTemplateAutocompleteQuery("");
     };
     
     // Move these functions to the top level
@@ -426,6 +580,10 @@ function SMSInterface() {
                     {allowDebugging && (
                         <div className="mb-4 p-2 bg-gray-100 rounded text-xs text-gray-700">
                             <div><b>Templates in globalConfig:</b> {templates.length}</div>
+                            <div><b>Available Fields:</b> {availableFields.map(f => `${f.name} (@${normalizeFieldName(f.name)})`).join(', ')}</div>
+                            <div><b>Selected Client:</b> {selectedClient ? `${selectedClient.getCellValue('Name') || selectedClient.getCellValue('First Name') || 'Unknown'} (${selectedClient.id})` : 'None'}</div>
+                            <div><b>Variable Autocomplete:</b> {showVariableAutocomplete ? `Active (query: "${variableAutocompleteQuery}", matches: ${filteredAutocompleteFields.length})` : 'Inactive'}</div>
+                            <div><b>Template Autocomplete:</b> {showTemplateAutocomplete ? `Active (query: "${templateAutocompleteQuery}", matches: ${filteredTemplateAutocomplete.length})` : 'Inactive'}</div>
                             <div><b>Raw Templates:</b> <pre>{JSON.stringify(templates, null, 2)}</pre></div>
                         </div>
                     )}
@@ -437,11 +595,115 @@ function SMSInterface() {
                             onChange={e => setNewName(e.target.value)}
                         />
                         <label className="block font-medium mb-1">Message</label>
-                        <textarea
-                            className="w-full border rounded p-2"
-                            value={newMessageEdit}
-                            onChange={e => setNewMessageEdit(e.target.value)}
-                        />
+                        <div className="relative">
+                            <textarea
+                                className="w-full border rounded p-2"
+                                value={newMessageEdit}
+                                onChange={handleTemplateEditorInput}
+                                onKeyDown={(e) => {
+                                    // Handle variable autocomplete
+                                    if (showVariableAutocomplete && filteredAutocompleteFields.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                        e.preventDefault();
+                                        handleVariableAutocompleteSelect(filteredAutocompleteFields[0]);
+                                    }
+                                    if (e.key === 'Escape') {
+                                        setShowVariableAutocomplete(false);
+                                        setVariableAutocompleteQuery("");
+                                    }
+                                    
+                                    // Handle variable picker (legacy)
+                                    if (showVariablePicker && filteredFields.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                        e.preventDefault();
+                                        const selectedField = filteredFields[0];
+                                        setNewMessageEdit(prev => prev + `@${normalizeFieldName(selectedField.name)}`);
+                                        setShowVariablePicker(false);
+                                        setVariableQuery("");
+                                    }
+                                    if (e.key === 'Escape') {
+                                        setShowVariablePicker(false);
+                                        setVariableQuery("");
+                                    }
+                                }}
+                                onBlur={() => {
+                                    // Delay hiding autocomplete to allow for clicks on dropdown items
+                                    setTimeout(() => {
+                                        setShowVariableAutocomplete(false);
+                                        setVariableAutocompleteQuery("");
+                                    }, 150);
+                                }}
+                            />
+                            <div className="absolute top-2 right-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowVariablePicker(!showVariablePicker)}
+                                    className="text-gray-500 hover:text-gray-700 p-1 rounded-md focus:outline-none text-sm font-bold"
+                                    title="Insert variable"
+                                >
+                                    @
+                                </button>
+                            </div>
+                            {showVariablePicker && (
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[200px] max-h-48 overflow-y-auto">
+                                    <div className="p-2 border-b">
+                                        <input
+                                            type="text"
+                                            placeholder="Search fields..."
+                                            value={variableQuery}
+                                            onChange={(e) => setVariableQuery(e.target.value)}
+                                            className="w-full p-1 text-sm border rounded"
+                                            autoFocus
+                                        />
+                                    </div>
+                                    {filteredFields.length === 0 ? (
+                                        <div className="p-2 text-sm text-gray-500">No fields found</div>
+                                    ) : (
+                                        filteredFields.map((field) => (
+                                            <button
+                                                key={field.id}
+                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                                onMouseDown={() => {
+                                                    setNewMessageEdit(prev => prev + `@${normalizeFieldName(field.name)}`);
+                                                    setShowVariablePicker(false);
+                                                    setVariableQuery("");
+                                                }}
+                                            >
+                                                <div className="font-medium">{field.name}</div>
+                                                <div className="text-xs text-gray-500">
+                                                    {field.type} • Use: @{normalizeFieldName(field.name)}
+                                                </div>
+                                            </button>
+                                        ))
+                                    )}
+                                </div>
+                            )}
+                            {showVariableAutocomplete && filteredAutocompleteFields.length > 0 && (
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[250px] max-h-48 overflow-y-auto">
+                                    <div className="p-2 border-b bg-gray-50">
+                                        <div className="text-xs text-gray-600">Available variables:</div>
+                                    </div>
+                                    {filteredAutocompleteFields.map((field) => (
+                                        <button
+                                            key={field.id}
+                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                            onMouseDown={() => handleVariableAutocompleteSelect(field)}
+                                        >
+                                            <div className="font-medium">{field.name}</div>
+                                            <div className="text-xs text-gray-500">
+                                                {field.type} • @{normalizeFieldName(field.name)}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <div className="mt-2 text-xs text-gray-600">
+                            Type @ to see available variables. Continue typing to filter the list. Use @ followed by a normalized field name to insert dynamic variables (e.g., @FirstName, @Phone)
+                            {availableFields.length > 0 && (
+                                <div className="mt-1">
+                                    <strong>Available fields:</strong> {availableFields.map(f => `${f.name} → @${normalizeFieldName(f.name)}`).join(', ')}
+                                </div>
+                            )}
+                        </div>
                         <div className="flex space-x-2 mt-4">
                             <button
                                 className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
@@ -482,15 +744,25 @@ function SMSInterface() {
                 )}
                 <ul className="mb-6">
                     {templates.map((template) => (
-                        <li key={template.id} className="flex items-center justify-between border-b py-2">
-                            <button className="text-blue-700 hover:underline text-left flex-1" onClick={() => {
-                                setEditingId(template.id);
-                                setNewName(template.name);
-                                setNewMessageEdit(template.message);
-                            }}>
-                                {template.name || <span className="italic text-gray-400">(Untitled)</span>}
-                            </button>
-                            <button className="ml-2 text-red-500 hover:text-red-700" onClick={() => deleteTemplate(template.id)} title="Delete Template">✕</button>
+                        <li key={template.id} className="border-b py-3">
+                            <div className="flex items-center justify-between mb-1">
+                                <button className="text-blue-700 hover:underline text-left flex-1" onClick={() => {
+                                    setEditingId(template.id);
+                                    setNewName(template.name);
+                                    setNewMessageEdit(template.message);
+                                }}>
+                                    {template.name || <span className="italic text-gray-400">(Untitled)</span>}
+                                </button>
+                                <button className="ml-2 text-red-500 hover:text-red-700" onClick={() => deleteTemplate(template.id)} title="Delete Template">✕</button>
+                            </div>
+                            <div className="text-sm text-gray-600 mb-1">
+                                <strong>Template:</strong> {template.message || <span className="italic text-gray-400">(No message)</span>}
+                            </div>
+                            {selectedClient && template.message && (
+                                <div className="text-sm text-green-600">
+                                    <strong>Preview:</strong> {resolveTemplateVariables(template.message, selectedClient)}
+                                </div>
+                            )}
                         </li>
                     ))}
                 </ul>
@@ -712,6 +984,17 @@ function SMSInterface() {
                                 value={newMessage}
                                 onChange={handleInput}
                                 onKeyDown={(e) => {
+                                    // Handle new template autocomplete
+                                    if (showTemplateAutocomplete && filteredTemplateAutocomplete.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                        e.preventDefault();
+                                        handleTemplateAutocompleteSelect(filteredTemplateAutocomplete[0]);
+                                    }
+                                    if (e.key === 'Escape') {
+                                        setShowTemplateAutocomplete(false);
+                                        setTemplateAutocompleteQuery("");
+                                    }
+                                    
+                                    // Handle old autocomplete (legacy)
                                     if (showAutocomplete && filteredTemplates.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
                                         e.preventDefault();
                                         handleTemplateSelect(filteredTemplates[0]);
@@ -733,17 +1016,51 @@ function SMSInterface() {
                                     e.target.style.height = 'auto';
                                     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
                                 }}
-                                onBlur={() => { setShowTemplatePicker(false); setShowAutocomplete(false); }}
+                                onBlur={() => { 
+                                    setShowTemplatePicker(false); 
+                                    setShowAutocomplete(false);
+                                    // Delay hiding template autocomplete to allow for clicks on dropdown items
+                                    setTimeout(() => {
+                                        setShowTemplateAutocomplete(false);
+                                        setTemplateAutocompleteQuery("");
+                                    }, 150);
+                                }}
                             />
+                            {showTemplateAutocomplete && filteredTemplateAutocomplete.length > 0 && (
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto">
+                                    <div className="p-2 border-b bg-gray-50">
+                                        <div className="text-xs text-gray-600">Available templates:</div>
+                                    </div>
+                                    {filteredTemplateAutocomplete.map((template) => (
+                                        <button
+                                            key={template.id}
+                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                            onMouseDown={() => handleTemplateAutocompleteSelect(template)}
+                                        >
+                                            <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                            {selectedClient && template.message && (
+                                                <div className="text-xs text-gray-600 mt-1">
+                                                    {resolveTemplateVariables(template.message, selectedClient)}
+                                                </div>
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                             {showAutocomplete && filteredTemplates.length > 0 && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[120px]">
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[300px]">
                                     {filteredTemplates.map((record) => (
                                         <button
                                             key={record.id}
-                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
+                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
                                             onMouseDown={() => handleTemplateSelect(record)}
                                         >
-                                            {record.name}
+                                            <div className="font-medium">{record.name}</div>
+                                            {selectedClient && record.message && (
+                                                <div className="text-xs text-gray-600 mt-1">
+                                                    {resolveTemplateVariables(record.message, selectedClient)}
+                                                </div>
+                                            )}
                                         </button>
                                     ))}
                                 </div>
@@ -770,26 +1087,50 @@ function SMSInterface() {
                         <div className="relative">
                             <button
                                 type="button"
-                                onClick={() => setShowTemplatePicker((v) => !v)}
+                                onClick={() => {
+                                    setShowTemplatePicker((v) => !v);
+                                    // Also show autocomplete when @ button is clicked
+                                    if (!showTemplateAutocomplete) {
+                                        setShowTemplateAutocomplete(true);
+                                        setTemplateAutocompleteQuery("");
+                                    }
+                                }}
                                 className="text-gray-500 hover:text-gray-700 p-1 rounded-md focus:outline-none text-lg font-bold"
                                 title="Insert template"
                             >
                                 @
                             </button>
-                            {showTemplatePicker && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[120px]">
-                                    <button
-                                        className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
-                                        onClick={() => {
-                                            if (selectedClient) {
-                                                const firstName = selectedClient.getCellValue('First Name') || '';
-                                                setNewMessage(prev => prev + `Hi ${firstName}`);
-                                            }
-                                            setShowTemplatePicker(false);
-                                        }}
-                                    >
-                                        Greeting
-                                    </button>
+                            {showTemplatePicker && !showTemplateAutocomplete && (
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto">
+                                    <div className="p-2 border-b bg-gray-50">
+                                        <div className="text-xs text-gray-600">Quick templates:</div>
+                                    </div>
+                                    {templates.length === 0 ? (
+                                        <div className="p-4 text-sm text-gray-500 text-center">
+                                            No templates found. Create templates in the template editor.
+                                        </div>
+                                    ) : (
+                                        templates.map((template) => (
+                                            <button
+                                                key={template.id}
+                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                                onClick={() => {
+                                                    if (selectedClient) {
+                                                        const resolvedMessage = resolveTemplateVariables(template.message, selectedClient);
+                                                        setNewMessage(prev => prev + resolvedMessage);
+                                                    }
+                                                    setShowTemplatePicker(false);
+                                                }}
+                                            >
+                                                <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                                {selectedClient && template.message && (
+                                                    <div className="text-xs text-gray-600 mt-1">
+                                                        {resolveTemplateVariables(template.message, selectedClient)}
+                                                    </div>
+                                                )}
+                                            </button>
+                                        ))
+                                    )}
                                 </div>
                             )}
                         </div>
