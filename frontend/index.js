@@ -13,14 +13,21 @@ function SMSInterface() {
                 type: 'boolean',
                 defaultValue: false,
             },
+            {
+                key: 'editTemplates',
+                label: 'Edit Templates',
+                type: 'boolean',
+                defaultValue: false,
+            },
         ],
         []
     );
     const allowDebugging = customProps?.customPropertyValueByKey?.allowDebugging;
+    const editTemplates = customProps?.customPropertyValueByKey?.editTemplates;
     
     // Get the Clients table
     const clientsTable = base.getTableByName('Clients');
-    const clientsRecords = useRecords(clientsTable);
+    const clientsRecords = clientsTable ? useRecords(clientsTable) : [];
     
     // State for selected client and messages
     const [selectedClientId, setSelectedClientId] = useState(null);
@@ -37,15 +44,16 @@ function SMSInterface() {
     const [showTemplatePicker, setShowTemplatePicker] = useState(false);
     const [templateQuery, setTemplateQuery] = useState("");
     const [showAutocomplete, setShowAutocomplete] = useState(false);
+    const [editingId, setEditingId] = useState(null);
+    const [newName, setNewName] = useState('');
+    const [newMessageEdit, setNewMessageEdit] = useState('');
     
-    // Template definitions
-    const templates = [
-        { name: "Greeting", value: (client) => `Hi ${client?.getCellValue('First Name') || ''}` }
-    ];
+    // Templates table integration
+    const templates = globalConfig.get('templates') || [];
     
     // Filtered templates for autocomplete
     const filteredTemplates = templateQuery
-        ? templates.filter(t => t.name.toLowerCase().startsWith(templateQuery.toLowerCase()))
+        ? templates.filter(r => (r.name || '').toLowerCase().startsWith(templateQuery.toLowerCase()))
         : [];
     
     // Load API key and phone number ID from global config on component mount
@@ -402,11 +410,134 @@ function SMSInterface() {
     // Handle template selection from autocomplete
     const handleTemplateSelect = (template) => {
         if (!selectedClient) return;
-        // Replace @query with template value
-        setNewMessage(prev => prev.replace(/@([a-zA-Z]*)$/, template.value(selectedClient)));
+        setNewMessage(prev => prev.replace(/@([a-zA-Z]*)$/, template.message));
         setShowAutocomplete(false);
         setTemplateQuery("");
     };
+    
+    // Move these functions to the top level
+    const addTemplate = async () => {
+        const newTemplates = [
+            ...templates,
+            { id: Date.now().toString(), name: 'New Template', message: '' }
+        ];
+        await globalConfig.setAsync('templates', newTemplates);
+    };
+    const deleteTemplate = async (templateId) => {
+        const newTemplates = templates.filter(t => t.id !== templateId);
+        await globalConfig.setAsync('templates', newTemplates);
+        setEditingId(null);
+    };
+    const saveEdit = async (templateId) => {
+        const newTemplates = templates.map(t =>
+            t.id === templateId ? { ...t, name: newName, message: newMessageEdit } : t
+        );
+        await globalConfig.setAsync('templates', newTemplates);
+        setEditingId(null);
+    };
+    
+    // Debug info for templates table
+    const allTableNames = base ? base.tables.map(t => t.name) : [];
+    
+    // Template Editor UI
+    if (editTemplates) {
+        // Editor view
+        if (editingId) {
+            const template = templates.find(t => t.id === editingId);
+            if (!template) return null;
+            return (
+                <div style={{ padding: 24 }}>
+                    <button className="mb-4 text-blue-600 hover:underline" onClick={() => setEditingId(null)}>&larr; Back to list</button>
+                    {allowDebugging && (
+                        <div className="mb-4 p-2 bg-gray-100 rounded text-xs text-gray-700">
+                            <div><b>Templates in globalConfig:</b> {templates.length}</div>
+                            <div><b>Raw Templates:</b> <pre>{JSON.stringify(templates, null, 2)}</pre></div>
+                        </div>
+                    )}
+                    <div style={{ border: '1px solid #eee', borderRadius: 8, padding: 16, position: 'relative', maxWidth: 500 }}>
+                        <label className="block font-medium mb-1">Template Name</label>
+                        <input
+                            className="w-full border rounded p-2 mb-2"
+                            value={newName}
+                            onChange={e => setNewName(e.target.value)}
+                        />
+                        <label className="block font-medium mb-1">Message</label>
+                        <textarea
+                            className="w-full border rounded p-2"
+                            value={newMessageEdit}
+                            onChange={e => setNewMessageEdit(e.target.value)}
+                        />
+                        <div className="flex space-x-2 mt-4">
+                            <button
+                                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                                onClick={() => saveEdit(template.id)}
+                            >
+                                Save
+                            </button>
+                            <button
+                                className="px-4 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50"
+                                onClick={() => setEditingId(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="px-4 py-2 text-red-500 border border-red-300 rounded hover:bg-red-50 ml-auto"
+                                onClick={() => deleteTemplate(template.id)}
+                                title="Delete Template"
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        // List view
+        return (
+            <div style={{ padding: 24, maxWidth: 500 }}>
+                {allowDebugging && (
+                    <div className="mb-4 p-2 bg-gray-100 rounded text-xs text-gray-700">
+                        <div><b>Templates in globalConfig:</b> {templates.length}</div>
+                        <div><b>Raw Templates:</b> <pre>{JSON.stringify(templates, null, 2)}</pre></div>
+                    </div>
+                )}
+                <h2 className="text-xl font-bold mb-4">Edit Templates</h2>
+                {templates.length === 0 && (
+                    <div className="mb-4 text-red-600 text-sm">No templates found. Add a template to get started.</div>
+                )}
+                <ul className="mb-6">
+                    {templates.map((template) => (
+                        <li key={template.id} className="flex items-center justify-between border-b py-2">
+                            <button className="text-blue-700 hover:underline text-left flex-1" onClick={() => {
+                                setEditingId(template.id);
+                                setNewName(template.name);
+                                setNewMessageEdit(template.message);
+                            }}>
+                                {template.name || <span className="italic text-gray-400">(Untitled)</span>}
+                            </button>
+                            <button className="ml-2 text-red-500 hover:text-red-700" onClick={() => deleteTemplate(template.id)} title="Delete Template">✕</button>
+                        </li>
+                    ))}
+                </ul>
+                <button
+                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    onClick={async () => {
+                        const newId = Date.now().toString();
+                        const newTemplates = [
+                            ...templates,
+                            { id: newId, name: '', message: '' }
+                        ];
+                        await globalConfig.setAsync('templates', newTemplates);
+                        setEditingId(newId);
+                        setNewName('');
+                        setNewMessageEdit('');
+                    }}
+                >
+                    Add Template
+                </button>
+            </div>
+        );
+    }
     
     if (!clientsTable) {
         return (
@@ -716,13 +847,13 @@ function SMSInterface() {
                             />
                             {showAutocomplete && filteredTemplates.length > 0 && (
                                 <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[120px]">
-                                    {filteredTemplates.map((template) => (
+                                    {filteredTemplates.map((record) => (
                                         <button
-                                            key={template.name}
+                                            key={record.id}
                                             className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm"
-                                            onMouseDown={() => handleTemplateSelect(template)}
+                                            onMouseDown={() => handleTemplateSelect(record)}
                                         >
-                                            {template.name}
+                                            {record.name}
                                         </button>
                                     ))}
                                 </div>
