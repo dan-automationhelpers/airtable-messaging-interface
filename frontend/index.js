@@ -35,9 +35,6 @@ function SMSInterface() {
     const [newMessage, setNewMessage] = useState('');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
-    const [openPhoneApiKey, setOpenPhoneApiKey] = useState('');
-    const [openPhoneNumberId, setOpenPhoneNumberId] = useState('');
-    const [showApiKeyInput, setShowApiKeyInput] = useState(false);
     const [showDebugPanel, setShowDebugPanel] = useState(false);
     const [debugLogs, setDebugLogs] = useState([]);
     const messagesEndRef = useRef(null);
@@ -55,32 +52,6 @@ function SMSInterface() {
     const filteredTemplates = templateQuery
         ? templates.filter(r => (r.name || '').toLowerCase().startsWith(templateQuery.toLowerCase()))
         : [];
-    
-    // Load API key and phone number ID from global config on component mount
-    useEffect(() => {
-        const savedApiKey = globalConfig.get('openPhoneApiKey');
-        const savedPhoneNumberId = globalConfig.get('openPhoneNumberId');
-        
-        if (savedApiKey) {
-            setOpenPhoneApiKey(savedApiKey);
-        }
-        if (savedPhoneNumberId) {
-            setOpenPhoneNumberId(savedPhoneNumberId);
-        }
-        
-        if (!savedApiKey || !savedPhoneNumberId) {
-            setShowApiKeyInput(true);
-        }
-    }, [globalConfig]);
-    
-    // Save API key and phone number ID to global config
-    const saveApiKey = (apiKey, phoneNumberId) => {
-        globalConfig.setAsync('openPhoneApiKey', apiKey);
-        globalConfig.setAsync('openPhoneNumberId', phoneNumberId);
-        setOpenPhoneApiKey(apiKey);
-        setOpenPhoneNumberId(phoneNumberId);
-        setShowApiKeyInput(false);
-    };
     
     // Add debug log
     const addDebugLog = (message, data = null) => {
@@ -117,7 +88,7 @@ function SMSInterface() {
         }
     };
     
-    // Fetch messages from OpenPhone API
+    // Fetch messages from OpenPhone API via Pipedream
     const fetchOpenPhoneMessages = async (phoneNumber) => {
         if (!phoneNumber) {
             addDebugLog('Missing phone number');
@@ -198,21 +169,17 @@ function SMSInterface() {
         ];
         
         for (const altPhone of alternatives) {
-            if (altPhone === originalPhone) continue; // Skip if same as original
+            if (altPhone === originalPhone) continue; // Skip the original format
             
-            addDebugLog('Trying alternative format', altPhone);
+            addDebugLog(`Trying alternative format: ${altPhone}`);
+            const pipedreamUrl = `https://eonnzavzyaryljw.m.pipedream.net?phone=${encodeURIComponent(altPhone)}`;
+            
             try {
-                const pipedreamUrl = `https://eonnzavzyaryljw.m.pipedream.net?phone=${encodeURIComponent(altPhone)}`;
-                const response = await fetch(pipedreamUrl, {
-                    method: 'GET'
-                });
-                
+                const response = await fetch(pipedreamUrl, { method: 'GET' });
                 if (response.ok) {
                     const data = await response.json();
-                    addDebugLog('Success with alternative format', altPhone);
-                    addDebugLog('Alternative response', data);
-                    
                     if (data.data && Array.isArray(data.data)) {
+                        addDebugLog(`Success with alternative format: ${altPhone}`);
                         const formattedMessages = data.data.map(msg => ({
                             id: msg.id,
                             text: msg.text,
@@ -222,45 +189,46 @@ function SMSInterface() {
                         })).sort((a, b) => a.timestamp - b.timestamp);
                         
                         setMessages(formattedMessages);
-                        return; // Success, exit the loop
+                        return; // Success, exit the function
                     }
                 }
             } catch (error) {
-                addDebugLog('Alternative format failed', { 
-                    phone: altPhone, 
-                    error: error.message,
-                    name: error.name,
-                    type: error.constructor.name
-                });
+                addDebugLog(`Failed with alternative format ${altPhone}`, error.message);
             }
         }
         
         addDebugLog('All alternative formats failed, using sample messages');
         setMessages(getSampleMessages());
     };
-    
-    // Sample messages for demonstration
+
+    // Get sample messages for fallback
     const getSampleMessages = () => [
-        { id: 1, text: "Hi there! How can I help you today?", sender: 'agent', timestamp: new Date(Date.now() - 300000) },
-        { id: 2, text: "I have a question about my recent order", sender: 'client', timestamp: new Date(Date.now() - 240000) },
-        { id: 3, text: "Of course! What's your order number?", sender: 'agent', timestamp: new Date(Date.now() - 180000) },
-        { id: 4, text: "It's #12345", sender: 'client', timestamp: new Date(Date.now() - 120000) },
-        { id: 5, text: "Let me look that up for you...", sender: 'agent', timestamp: new Date(Date.now() - 60000) },
+        {
+            id: 1,
+            text: "Hi! Thanks for reaching out. How can I help you today?",
+            sender: 'agent',
+            timestamp: new Date(Date.now() - 3600000), // 1 hour ago
+            status: 'delivered'
+        },
+        {
+            id: 2,
+            text: "I'm interested in your services. Can you tell me more?",
+            sender: 'client',
+            timestamp: new Date(Date.now() - 1800000), // 30 minutes ago
+            status: 'delivered'
+        },
+        {
+            id: 3,
+            text: "Absolutely! I'd be happy to walk you through our offerings. What specific area are you looking for help with?",
+            sender: 'agent',
+            timestamp: new Date(Date.now() - 900000), // 15 minutes ago
+            status: 'delivered'
+        }
     ];
-    
-    // Initialize messages when component mounts
-    useEffect(() => {
-        setMessages(getSampleMessages());
-    }, []);
-    
-    // Auto-scroll to bottom when new messages arrive
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
-    
+
     // Get selected client record
-    const selectedClient = clientsRecords?.find(record => record.id === selectedClientId);
-    
+    const selectedClient = selectedClientId ? clientsRecords.find(record => record.id === selectedClientId) : null;
+
     // Load messages when client is selected
     useEffect(() => {
         if (selectedClient) {
@@ -270,8 +238,15 @@ function SMSInterface() {
             } else {
                 setMessages(getSampleMessages());
             }
+        } else {
+            setMessages([]);
         }
-    }, [selectedClient]);
+    }, [selectedClientId, selectedClient]);
+    
+    // Auto-scroll to bottom when new messages arrive
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
     
     // Handle sending a new message
     const handleSendMessage = async () => {
@@ -548,80 +523,6 @@ function SMSInterface() {
         );
     }
     
-    // API Key Configuration Modal
-    if (showApiKeyInput) {
-        return (
-            <div className="h-screen flex items-center justify-center bg-gray-50">
-                <div className="bg-white p-8 rounded-lg shadow-lg max-w-md w-full mx-4">
-                    <h2 className="text-2xl font-semibold text-gray-800 mb-4">OpenPhone API Configuration</h2>
-                    <p className="text-gray-600 mb-6">
-                        To use the SMS chat interface, you'll need to provide your OpenPhone API key and Phone Number ID. 
-                        These will be stored securely in your Airtable base.
-                    </p>
-                    
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                OpenPhone API Key
-                            </label>
-                            <input
-                                type="password"
-                                placeholder="Enter your OpenPhone API key"
-                                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                value={openPhoneApiKey}
-                                onChange={(e) => setOpenPhoneApiKey(e.target.value)}
-                            />
-                        </div>
-                        
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Phone Number ID
-                            </label>
-                            <input
-                                type="text"
-                                placeholder="e.g., PNJVC2e8zs"
-                                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                value={openPhoneNumberId}
-                                onChange={(e) => setOpenPhoneNumberId(e.target.value)}
-                            />
-                        </div>
-                        
-                        <div className="flex space-x-3">
-                            <button
-                                onClick={() => saveApiKey(openPhoneApiKey, openPhoneNumberId)}
-                                disabled={!openPhoneApiKey.trim() || !openPhoneNumberId.trim()}
-                                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                            >
-                                Save & Continue
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setOpenPhoneApiKey('');
-                                    setOpenPhoneNumberId('');
-                                    setShowApiKeyInput(false);
-                                }}
-                                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50"
-                            >
-                                Skip
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div className="mt-6 p-4 bg-blue-50 rounded-md">
-                        <h3 className="text-sm font-medium text-blue-800 mb-2">How to get your credentials:</h3>
-                        <ol className="text-xs text-blue-700 space-y-1">
-                            <li>1. Log into your OpenPhone account</li>
-                            <li>2. Go to Settings → API</li>
-                            <li>3. Generate a new API key</li>
-                            <li>4. Find your Phone Number ID in the API docs or settings</li>
-                            <li>5. Copy and paste both values here</li>
-                        </ol>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-    
     return (
         <div className="h-screen flex flex-col">
             {/* Header */}
@@ -638,12 +539,6 @@ function SMSInterface() {
                                 className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded-md"
                             >
                                 {showDebugPanel ? 'Hide Debug' : 'Show Debug'}
-                            </button>
-                            <button
-                                onClick={() => setShowApiKeyInput(true)}
-                                className="px-3 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md"
-                            >
-                                API Settings
                             </button>
                         </div>
                     )}
@@ -753,11 +648,6 @@ function SMSInterface() {
                         <p className="text-xs text-blue-600">
                             Phone: {selectedClient.getCellValue('Phone') || 'Not specified'}
                         </p>
-                        {(!openPhoneApiKey || !openPhoneNumberId) && (
-                            <p className="text-xs text-orange-600 mt-1">
-                                ⚠️ Missing API credentials. Using sample messages.
-                            </p>
-                        )}
                     </div>
                 )}
             </div>
