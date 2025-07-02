@@ -1,5 +1,5 @@
 import {initializeBlock, useBase, useRecords, useGlobalConfig, useWatchable, useCustomProperties} from '@airtable/blocks/interface/ui';
-import {useState, useEffect, useRef} from 'react';
+import {useState, useEffect, useRef, useMemo} from 'react';
 import './style.css';
 
 function SMSInterface() {
@@ -69,6 +69,15 @@ function SMSInterface() {
           )
         : templates;
     
+    // Function to normalize field names (remove spaces, emojis, punctuation)
+    const normalizeFieldName = (fieldName) => {
+        if (!fieldName) return '';
+        return fieldName
+            .replace(/[\s\p{P}\p{Emoji}]/gu, '') // Remove spaces, punctuation, and emojis
+            .replace(/[^\w]/g, '') // Remove any remaining non-word characters
+            .replace(/^(\d)/, '_$1'); // Add underscore prefix if starts with number
+    };
+    
     // Get available fields from Clients table for variables
     const availableFields = clientsTable ? clientsTable.fields.map(field => ({
         id: field.id,
@@ -92,21 +101,17 @@ function SMSInterface() {
           )
         : availableFields;
     
-    // Function to normalize field names (remove spaces, emojis, punctuation)
-    const normalizeFieldName = (fieldName) => {
-        if (!fieldName) return '';
-        return fieldName
-            .replace(/[\s\p{P}\p{Emoji}]/gu, '') // Remove spaces, punctuation, and emojis
-            .replace(/[^\w]/g, '') // Remove any remaining non-word characters
-            .replace(/^(\d)/, '_$1'); // Add underscore prefix if starts with number
-    };
-    
     // Function to resolve variables in a template message
     const resolveTemplateVariables = (templateText, clientRecord) => {
         if (!templateText || !clientRecord) return templateText;
         
-        // Replace @FieldName with actual field values
-        return templateText.replace(/@([a-zA-Z0-9_]+)/g, (match, normalizedFieldName) => {
+        let resolvedText = templateText;
+        
+        // Handle conditional logic first
+        resolvedText = resolveConditionalLogic(resolvedText, clientRecord);
+        
+        // Then replace @FieldName with actual field values
+        resolvedText = resolvedText.replace(/@([a-zA-Z0-9_]+)/g, (match, normalizedFieldName) => {
             // Find the field by matching normalized names
             const field = availableFields.find(f => normalizeFieldName(f.name) === normalizedFieldName);
             if (field) {
@@ -115,6 +120,83 @@ function SMSInterface() {
             }
             return match; // Return original if field not found
         });
+        
+        return resolvedText;
+    };
+    
+    // Function to resolve conditional logic in templates
+    const resolveConditionalLogic = (templateText, clientRecord) => {
+        if (!templateText || !clientRecord) return templateText;
+        
+        // Pattern to match: [if FieldName = Value] content [endif]
+        const conditionalPattern = /\[if\s+([a-zA-Z\s]+)\s*=\s*([^\]]+)\]\s*([\s\S]*?)\s*\[endif\]/gi;
+        
+        return templateText.replace(conditionalPattern, (match, fieldName, expectedValue, content) => {
+            try {
+                // Find the field by matching normalized names (same as variable resolution)
+                const normalizedFieldName = normalizeFieldName(fieldName.trim());
+                const field = availableFields.find(f => normalizeFieldName(f.name) === normalizedFieldName);
+                
+                if (!field) {
+                    addDebugLog(`Field not found in conditional logic`, { 
+                        requestedField: fieldName.trim(), 
+                        normalizedField: normalizedFieldName,
+                        availableFields: availableFields.map(f => f.name)
+                    });
+                    return ''; // Return empty string if field not found
+                }
+                
+                // Get the actual field value using the correct field name
+                const actualValue = clientRecord.getCellValue(field.name);
+                
+                // Debug the conditional logic
+                addDebugLog('Conditional logic check', {
+                    requestedField: fieldName.trim(),
+                    normalizedField: normalizedFieldName,
+                    actualFieldName: field.name,
+                    expectedValue: expectedValue.trim(),
+                    actualValue: actualValue,
+                    content: content.trim(),
+                    clientName: clientRecord.getCellValue('Name') || clientRecord.getCellValue('First Name')
+                });
+                
+                // Compare values (case-insensitive)
+                if (actualValue && actualValue.toString().toLowerCase() === expectedValue.trim().toLowerCase()) {
+                    addDebugLog('Condition met - returning content', { content: content.trim() });
+                    return content.trim();
+                } else {
+                    addDebugLog('Condition not met - returning empty string');
+                    return ''; // Return empty string if condition is not met
+                }
+            } catch (error) {
+                // If there's an error, return the original content to avoid breaking the template
+                addDebugLog(`Error in conditional logic: ${error.message}`, { fieldName, expectedValue, content });
+                return content.trim();
+            }
+        });
+    };
+    
+    // Function to validate conditional syntax
+    const validateConditionalSyntax = (templateText) => {
+        const issues = [];
+        
+        // Check for unmatched [if] tags
+        const ifMatches = templateText.match(/\[if/g) || [];
+        const endifMatches = templateText.match(/\[endif\]/g) || [];
+        
+        if (ifMatches.length !== endifMatches.length) {
+            issues.push(`Mismatched conditional tags: ${ifMatches.length} [if] vs ${endifMatches.length} [endif]`);
+        }
+        
+        // Check for basic syntax issues - look for [if without = sign
+        const malformedIfMatches = templateText.match(/\[if[^=]*\]/g) || [];
+        malformedIfMatches.forEach(match => {
+            if (!match.includes('=')) {
+                issues.push(`Missing equals sign in: "${match}" - should be "[if FieldName = Value]"`);
+            }
+        });
+        
+        return issues;
     };
     
     // Add debug log
@@ -568,6 +650,25 @@ function SMSInterface() {
     // Debug info for templates table
     const allTableNames = base ? base.tables.map(t => t.name) : [];
     
+    // Memoized validation result to prevent infinite re-renders
+    const templateValidationIssues = useMemo(() => {
+        return newMessageEdit ? validateConditionalSyntax(newMessageEdit) : [];
+    }, [newMessageEdit]);
+    
+    // Memoized template resolution to prevent infinite re-renders
+    const resolvedTemplates = useMemo(() => {
+        if (!selectedClient || !templates.length) return [];
+        addDebugLog('Resolving templates for client', { 
+            clientName: selectedClient.getCellValue('Name') || selectedClient.getCellValue('First Name'),
+            clientId: selectedClient.id,
+            templatesCount: templates.length 
+        });
+        return templates.map(template => ({
+            ...template,
+            resolvedMessage: resolveTemplateVariables(template.message, selectedClient)
+        }));
+    }, [templates, selectedClient]);
+    
     // Template Editor UI
     if (editTemplates) {
         // Editor view
@@ -584,6 +685,7 @@ function SMSInterface() {
                             <div><b>Selected Client:</b> {selectedClient ? `${selectedClient.getCellValue('Name') || selectedClient.getCellValue('First Name') || 'Unknown'} (${selectedClient.id})` : 'None'}</div>
                             <div><b>Variable Autocomplete:</b> {showVariableAutocomplete ? `Active (query: "${variableAutocompleteQuery}", matches: ${filteredAutocompleteFields.length})` : 'Inactive'}</div>
                             <div><b>Template Autocomplete:</b> {showTemplateAutocomplete ? `Active (query: "${templateAutocompleteQuery}", matches: ${filteredTemplateAutocomplete.length})` : 'Inactive'}</div>
+                            <div><b>Conditional Logic:</b> Supported syntax: [if FieldName = Value] content [endif]</div>
                             <div><b>Raw Templates:</b> <pre>{JSON.stringify(templates, null, 2)}</pre></div>
                         </div>
                     )}
@@ -703,6 +805,24 @@ function SMSInterface() {
                                     <strong>Available fields:</strong> {availableFields.map(f => `${f.name} → @${normalizeFieldName(f.name)}`).join(', ')}
                                 </div>
                             )}
+                            <div className="mt-2 p-2 bg-blue-50 rounded border-l-4 border-blue-400">
+                                <div className="font-medium text-blue-800 mb-1">Conditional Logic Examples:</div>
+                                <div className="text-xs text-blue-700 space-y-1">
+                                    <div>• <code>[if Status = Shipped] Your order is on its way! [endif]</code></div>
+                                    <div>• <code>[if Priority = High] ⚠️ Urgent: [endif]@FirstName, your request is being processed.</code></div>
+                                    <div>• <code>Hi @FirstName! [if VIP = Yes] Thank you for being a VIP customer! [endif]</code></div>
+                                </div>
+                            </div>
+                            {templateValidationIssues.length > 0 && (
+                                <div className="mt-2 p-2 bg-red-50 rounded border-l-4 border-red-400">
+                                    <div className="font-medium text-red-800 mb-1">Syntax Issues:</div>
+                                    <div className="text-xs text-red-700">
+                                        {templateValidationIssues.map((issue, index) => (
+                                            <div key={index}>• {issue}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                         <div className="flex space-x-2 mt-4">
                             <button
@@ -758,11 +878,14 @@ function SMSInterface() {
                             <div className="text-sm text-gray-600 mb-1">
                                 <strong>Template:</strong> {template.message || <span className="italic text-gray-400">(No message)</span>}
                             </div>
-                            {selectedClient && template.message && (
-                                <div className="text-sm text-green-600">
-                                    <strong>Preview:</strong> {resolveTemplateVariables(template.message, selectedClient)}
-                                </div>
-                            )}
+                            {selectedClient && template.message && (() => {
+                                const resolvedTemplate = resolvedTemplates.find(rt => rt.id === template.id);
+                                return resolvedTemplate ? (
+                                    <div className="text-sm text-green-600">
+                                        <strong>Preview:</strong> {resolvedTemplate.resolvedMessage}
+                                    </div>
+                                ) : null;
+                            })()}
                         </li>
                     ))}
                 </ul>
@@ -781,6 +904,24 @@ function SMSInterface() {
                     }}
                 >
                     Add Template
+                </button>
+                <button
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 ml-2"
+                    onClick={async () => {
+                        const newId = Date.now().toString();
+                        const sampleTemplate = {
+                            id: newId,
+                            name: 'Order Status Update',
+                            message: 'Hi @FirstName! [if Status = Shipped] Your order is on its way! Here is your tracking number: @TrackingNumber [endif][if Status = Pending] Your order is being processed and will ship within 1-2 business days. [endif][if Status = Delivered] Your order has been delivered! We hope you love it. [endif]'
+                        };
+                        const newTemplates = [...templates, sampleTemplate];
+                        await globalConfig.setAsync('templates', newTemplates);
+                        setEditingId(newId);
+                        setNewName(sampleTemplate.name);
+                        setNewMessageEdit(sampleTemplate.message);
+                    }}
+                >
+                    Add Sample Template
                 </button>
             </div>
         );
@@ -1031,20 +1172,23 @@ function SMSInterface() {
                                     <div className="p-2 border-b bg-gray-50">
                                         <div className="text-xs text-gray-600">Available templates:</div>
                                     </div>
-                                    {filteredTemplateAutocomplete.map((template) => (
-                                        <button
-                                            key={template.id}
-                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
-                                            onMouseDown={() => handleTemplateAutocompleteSelect(template)}
-                                        >
-                                            <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
-                                            {selectedClient && template.message && (
-                                                <div className="text-xs text-gray-600 mt-1">
-                                                    {resolveTemplateVariables(template.message, selectedClient)}
-                                                </div>
-                                            )}
-                                        </button>
-                                    ))}
+                                    {filteredTemplateAutocomplete.map((template) => {
+                                        const resolvedTemplate = resolvedTemplates.find(rt => rt.id === template.id);
+                                        return (
+                                            <button
+                                                key={template.id}
+                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                                onMouseDown={() => handleTemplateAutocompleteSelect(template)}
+                                            >
+                                                <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                                {resolvedTemplate && (
+                                                    <div className="text-xs text-gray-600 mt-1">
+                                                        {resolvedTemplate.resolvedMessage}
+                                                    </div>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             )}
                             {showAutocomplete && filteredTemplates.length > 0 && (
@@ -1110,24 +1254,19 @@ function SMSInterface() {
                                             No templates found. Create templates in the template editor.
                                         </div>
                                     ) : (
-                                        templates.map((template) => (
+                                        resolvedTemplates.map((template) => (
                                             <button
                                                 key={template.id}
                                                 className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
                                                 onClick={() => {
-                                                    if (selectedClient) {
-                                                        const resolvedMessage = resolveTemplateVariables(template.message, selectedClient);
-                                                        setNewMessage(prev => prev + resolvedMessage);
-                                                    }
+                                                    setNewMessage(prev => prev + template.resolvedMessage);
                                                     setShowTemplatePicker(false);
                                                 }}
                                             >
                                                 <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
-                                                {selectedClient && template.message && (
-                                                    <div className="text-xs text-gray-600 mt-1">
-                                                        {resolveTemplateVariables(template.message, selectedClient)}
-                                                    </div>
-                                                )}
+                                                <div className="text-xs text-gray-600 mt-1">
+                                                    {template.resolvedMessage}
+                                                </div>
                                             </button>
                                         ))
                                     )}
