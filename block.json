@@ -1,0 +1,8 @@
+{
+    "version": "1.0",
+    "frontendEntry": "./frontend/index.js",
+    "backendEntry": "./backend/index.js",
+    "bundler": {
+        "module": "./bundler.js"
+    }
+}
