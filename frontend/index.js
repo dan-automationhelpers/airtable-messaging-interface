@@ -52,6 +52,8 @@ function SMSInterface() {
     const [showTemplateAutocomplete, setShowTemplateAutocomplete] = useState(false);
     const [templateAutocompleteQuery, setTemplateAutocompleteQuery] = useState("");
     const [messageCursorPosition, setMessageCursorPosition] = useState(0);
+    // Add ref for message input
+    const messageInputRef = useRef(null);
     
     // Templates table integration
     const templates = globalConfig.get('templates') || [];
@@ -68,6 +70,19 @@ function SMSInterface() {
             (template.message || '').toLowerCase().includes(templateAutocompleteQuery.toLowerCase())
           )
         : templates;
+    
+    // Conditional logic options for template autocomplete
+    const templateConditionalOptions = [
+        { id: 'if', name: 'if', display: '@if', description: 'Insert conditional if statement' },
+        { id: 'endif', name: 'endif', display: '@endif', description: 'Insert conditional end statement' }
+    ];
+    
+    // Filtered conditional options for template autocomplete
+    const filteredTemplateConditionalOptions = templateAutocompleteQuery
+        ? templateConditionalOptions.filter(option => 
+            option.name.toLowerCase().includes(templateAutocompleteQuery.toLowerCase())
+          )
+        : templateConditionalOptions;
     
     // Function to normalize field names (remove spaces, emojis, punctuation)
     const normalizeFieldName = (fieldName) => {
@@ -101,24 +116,108 @@ function SMSInterface() {
           )
         : availableFields;
     
+    // Conditional logic options for autocomplete
+    const conditionalOptions = [
+        { id: 'if', name: 'if', display: '@if', description: 'Insert conditional if statement' },
+        { id: 'endif', name: 'endif', display: '@endif', description: 'Insert conditional end statement' }
+    ];
+    
+    // Filtered conditional options for autocomplete
+    const filteredConditionalOptions = variableAutocompleteQuery
+        ? conditionalOptions.filter(option => 
+            option.name.toLowerCase().includes(variableAutocompleteQuery.toLowerCase())
+          )
+        : conditionalOptions;
+    
     // Function to resolve variables in a template message
     const resolveTemplateVariables = (templateText, clientRecord) => {
         if (!templateText || !clientRecord) return templateText;
         
-        let resolvedText = templateText;
+        addDebugLog('Starting template variable resolution', {
+            templateText: templateText,
+            clientName: clientRecord.getCellValue('Name') || clientRecord.getCellValue('First Name'),
+            clientId: clientRecord.id
+        });
         
+        let resolvedText = templateText;
         // Handle conditional logic first
         resolvedText = resolveConditionalLogic(resolvedText, clientRecord);
         
+        addDebugLog('After conditional logic resolution', {
+            resolvedText: resolvedText
+        });
+        
         // Then replace @FieldName with actual field values
         resolvedText = resolvedText.replace(/@([a-zA-Z0-9_]+)/g, (match, normalizedFieldName) => {
-            // Find the field by matching normalized names
-            const field = availableFields.find(f => normalizeFieldName(f.name) === normalizedFieldName);
+            const cleanFieldName = normalizedFieldName.replace(/^@/, '');
+            const field = availableFields.find(f => normalizeFieldName(f.name) === cleanFieldName);
+            
+            addDebugLog('Processing field variable', {
+                match: match,
+                normalizedFieldName: normalizedFieldName,
+                cleanFieldName: cleanFieldName,
+                fieldFound: !!field,
+                fieldName: field ? field.name : 'NOT_FOUND'
+            });
+            
             if (field) {
-                const fieldValue = clientRecord.getCellValue(field.name);
-                return fieldValue || match; // Return original if field value is empty
+                let fieldValue = clientRecord.getCellValue(field.name);
+                
+                addDebugLog('Field value retrieved', {
+                    fieldName: field.name,
+                    fieldValue: fieldValue,
+                    fieldValueType: typeof fieldValue,
+                    isArray: Array.isArray(fieldValue)
+                });
+                
+                if (Array.isArray(fieldValue)) {
+                    // Improved: If array item has .value, use it (and if .value is object, use .name, .url, .text, or JSON.stringify)
+                    const result = fieldValue.map(v => {
+                        if (v && typeof v === 'object') {
+                            if ('value' in v) {
+                                if (typeof v.value === 'object' && v.value !== null) {
+                                    return v.value.name || v.value.url || v.value.text || JSON.stringify(v.value);
+                                }
+                                return v.value != null ? v.value.toString() : '';
+                            }
+                            return v.name || v.url || v.text || JSON.stringify(v);
+                        }
+                        return v != null ? v.toString() : '';
+                    }).join(', ');
+                    
+                    addDebugLog('Array field processed', {
+                        fieldName: field.name,
+                        result: result
+                    });
+                    
+                    return result;
+                } else if (fieldValue && typeof fieldValue === 'object') {
+                    // Use .name, .url, .text, or JSON.stringify
+                    const result = fieldValue.name || fieldValue.url || fieldValue.text || JSON.stringify(fieldValue);
+                    
+                    addDebugLog('Object field processed', {
+                        fieldName: field.name,
+                        result: result
+                    });
+                    
+                    return result;
+                } else if (fieldValue != null) {
+                    const result = fieldValue.toString();
+                    
+                    addDebugLog('Simple field processed', {
+                        fieldName: field.name,
+                        result: result
+                    });
+                    
+                    return result;
+                }
             }
-            return match; // Return original if field not found
+            return '';
+        });
+        
+        addDebugLog('Final resolved template', {
+            originalText: templateText,
+            resolvedText: resolvedText
         });
         
         return resolvedText;
@@ -127,28 +226,51 @@ function SMSInterface() {
     // Function to resolve conditional logic in templates
     const resolveConditionalLogic = (templateText, clientRecord) => {
         if (!templateText || !clientRecord) return templateText;
-        
-        // Pattern to match: [if FieldName = Value] content [endif]
-        const conditionalPattern = /\[if\s+([a-zA-Z\s]+)\s*=\s*([^\]]+)\]\s*([\s\S]*?)\s*\[endif\]/gi;
-        
+        const conditionalPattern = /\[if\s+([a-zA-Z@\s]+)\s*=\s*([^\]]+)\]\s*([\s\S]*?)\s*\[endif\]/gi;
         return templateText.replace(conditionalPattern, (match, fieldName, expectedValue, content) => {
             try {
-                // Find the field by matching normalized names (same as variable resolution)
-                const normalizedFieldName = normalizeFieldName(fieldName.trim());
+                // Remove leading @ if present
+                const cleanFieldName = fieldName.trim().replace(/^@/, '');
+                const normalizedFieldName = normalizeFieldName(cleanFieldName);
                 const field = availableFields.find(f => normalizeFieldName(f.name) === normalizedFieldName);
-                
                 if (!field) {
-                    addDebugLog(`Field not found in conditional logic`, { 
-                        requestedField: fieldName.trim(), 
+                    addDebugLog(`Field not found in conditional logic`, {
+                        requestedField: fieldName.trim(),
                         normalizedField: normalizedFieldName,
                         availableFields: availableFields.map(f => f.name)
                     });
-                    return ''; // Return empty string if field not found
+                    return '';
                 }
-                
                 // Get the actual field value using the correct field name
                 const actualValue = clientRecord.getCellValue(field.name);
-                
+                let valueForComparison = actualValue;
+                let actualValueType = typeof actualValue;
+                let conditionMet = false;
+                // If it's an array (linked record to single select), check if any .value matches
+                if (Array.isArray(actualValue)) {
+                    actualValueType = 'linkedRecordArray';
+                    const values = actualValue.map(v => {
+                        if (v && typeof v === 'object') {
+                            // Handle different possible structures
+                            if (v.value && typeof v.value === 'object' && v.value.name) {
+                                return v.value.name;
+                            } else if (v.value) {
+                                return v.value.toString();
+                            } else if (v.name) {
+                                return v.name;
+                            }
+                        }
+                        return v ? v.toString() : '';
+                    }).filter(Boolean);
+                    valueForComparison = values.join(', ');
+                    conditionMet = values.some(value => value && value.toLowerCase() === expectedValue.trim().toLowerCase());
+                } else if (actualValue && typeof actualValue === 'object' && actualValue !== null && actualValue.hasOwnProperty('name')) {
+                    actualValueType = 'singleSelect';
+                    valueForComparison = actualValue.name;
+                    conditionMet = valueForComparison && valueForComparison.toLowerCase() === expectedValue.trim().toLowerCase();
+                } else {
+                    conditionMet = valueForComparison && valueForComparison.toString().toLowerCase() === expectedValue.trim().toLowerCase();
+                }
                 // Debug the conditional logic
                 addDebugLog('Conditional logic check', {
                     requestedField: fieldName.trim(),
@@ -156,20 +278,25 @@ function SMSInterface() {
                     actualFieldName: field.name,
                     expectedValue: expectedValue.trim(),
                     actualValue: actualValue,
+                    actualValueType: actualValueType,
+                    valueForComparison: valueForComparison,
                     content: content.trim(),
                     clientName: clientRecord.getCellValue('Name') || clientRecord.getCellValue('First Name')
                 });
-                
-                // Compare values (case-insensitive)
-                if (actualValue && actualValue.toString().toLowerCase() === expectedValue.trim().toLowerCase()) {
+                addDebugLog('Conditional logic result', {
+                    requestedField: fieldName.trim(),
+                    expectedValue: expectedValue.trim(),
+                    valueForComparison: valueForComparison,
+                    conditionMet: conditionMet
+                });
+                if (conditionMet) {
                     addDebugLog('Condition met - returning content', { content: content.trim() });
                     return content.trim();
                 } else {
                     addDebugLog('Condition not met - returning empty string');
-                    return ''; // Return empty string if condition is not met
+                    return '';
                 }
             } catch (error) {
-                // If there's an error, return the original content to avoid breaking the template
                 addDebugLog(`Error in conditional logic: ${error.message}`, { fieldName, expectedValue, content });
                 return content.trim();
             }
@@ -197,6 +324,25 @@ function SMSInterface() {
         });
         
         return issues;
+    };
+    
+    // Helper function to insert conditional logic with field
+    const insertConditionalWithField = (fieldName) => {
+        const beforeCursor = newMessageEdit.substring(0, cursorPosition);
+        const afterCursor = newMessageEdit.substring(cursorPosition);
+        const normalizedField = normalizeFieldName(fieldName);
+        const newValue = beforeCursor + `[if @${normalizedField} = ]` + afterCursor;
+        setNewMessageEdit(newValue);
+        
+        // Set cursor position after the field name
+        const newCursorPos = beforeCursor.length + `[if @${normalizedField} = `.length;
+        setTimeout(() => {
+            const textarea = document.querySelector('textarea[value="' + newValue + '"]');
+            if (textarea) {
+                textarea.setSelectionRange(newCursorPos, newCursorPos);
+                textarea.focus();
+            }
+        }, 0);
     };
     
     // Add debug log
@@ -377,6 +523,14 @@ function SMSInterface() {
 
     // Load messages when client is selected
     useEffect(() => {
+        // Clear debug logs when switching clients
+        if (allowDebugging) {
+            setDebugLogs([]);
+        }
+        
+        // Clear message input when switching clients
+        setNewMessage('');
+        
         if (selectedClient) {
             const phoneNumber = selectedClient.getCellValue('Phone');
             if (phoneNumber) {
@@ -397,10 +551,12 @@ function SMSInterface() {
     // Handle sending a new message
     const handleSendMessage = async () => {
         if (newMessage.trim() && selectedClient) {
+            // Resolve variables and conditional logic here
+            const resolvedText = resolveTemplateVariables(newMessage, selectedClient);
             const messageId = Date.now(); // Use timestamp as temporary ID
             const message = {
                 id: messageId,
-                text: newMessage,
+                text: resolvedText,
                 sender: 'agent',
                 timestamp: new Date(),
                 status: 'queued'
@@ -415,7 +571,7 @@ function SMSInterface() {
                     const formattedPhone = formatPhoneNumber(phoneNumber);
 
                     addDebugLog('Sending message via Pipedream', {
-                        message: newMessage,
+                        message: resolvedText,
                         phone: formattedPhone
                     });
 
@@ -425,7 +581,7 @@ function SMSInterface() {
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            message: newMessage,
+                            message: resolvedText,
                             phone: formattedPhone
                         })
                     });
@@ -525,6 +681,9 @@ function SMSInterface() {
         const match = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
         
         if (match) {
+            const query = match[1].toLowerCase();
+            
+            // Always show autocomplete for @ queries, including partial matches
             setTemplateAutocompleteQuery(match[1]);
             setShowTemplateAutocomplete(true);
             // Hide the old autocomplete
@@ -548,6 +707,9 @@ function SMSInterface() {
         const match = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
         
         if (match) {
+            const query = match[1].toLowerCase();
+            
+            // Always show autocomplete for @ queries, including partial matches
             setVariableAutocompleteQuery(match[1]);
             setShowVariableAutocomplete(true);
         } else {
@@ -598,19 +760,15 @@ function SMSInterface() {
     // Handle template autocomplete selection in messaging UI
     const handleTemplateAutocompleteSelect = (template) => {
         if (!selectedClient) return;
-        
         const beforeCursor = newMessage.substring(0, messageCursorPosition);
         const afterCursor = newMessage.substring(messageCursorPosition);
-        
-        // Find the start of the @ template being typed
         const beforeMatch = beforeCursor.match(/@([a-zA-Z0-9_]*)$/);
         if (beforeMatch) {
             const startPos = beforeCursor.lastIndexOf('@');
+            // Insert the RESOLVED template text
             const resolvedMessage = resolveTemplateVariables(template.message, selectedClient);
             const newValue = newMessage.substring(0, startPos) + resolvedMessage + afterCursor;
-            
             setNewMessage(newValue);
-            
             // Set cursor position after the inserted template
             const newCursorPos = startPos + resolvedMessage.length;
             setTimeout(() => {
@@ -621,7 +779,6 @@ function SMSInterface() {
                 }
             }, 0);
         }
-        
         setShowTemplateAutocomplete(false);
         setTemplateAutocompleteQuery("");
     };
@@ -669,6 +826,19 @@ function SMSInterface() {
         }));
     }, [templates, selectedClient]);
     
+    // Function to resize the message input textarea
+    const resizeMessageInput = () => {
+        if (messageInputRef.current) {
+            messageInputRef.current.style.height = 'auto';
+            messageInputRef.current.style.height = Math.min(messageInputRef.current.scrollHeight, 120) + 'px';
+        }
+    };
+
+    // Resize on newMessage change (for programmatic changes like template insertion)
+    useEffect(() => {
+        resizeMessageInput();
+    }, [newMessage]);
+    
     // Template Editor UI
     if (editTemplates) {
         // Editor view
@@ -699,100 +869,127 @@ function SMSInterface() {
                         <label className="block font-medium mb-1">Message</label>
                         <div className="relative">
                             <textarea
-                                className="w-full border rounded p-2"
-                                value={newMessageEdit}
-                                onChange={handleTemplateEditorInput}
+                                ref={messageInputRef}
+                                value={newMessage}
+                                onChange={handleInput}
                                 onKeyDown={(e) => {
-                                    // Handle variable autocomplete
-                                    if (showVariableAutocomplete && filteredAutocompleteFields.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                    // Handle new template autocomplete
+                                    if (showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (e.key === 'Enter' || e.key === 'Tab')) {
                                         e.preventDefault();
-                                        handleVariableAutocompleteSelect(filteredAutocompleteFields[0]);
+                                        
+                                        // If there are templates, select the first one
+                                        if (filteredTemplateAutocomplete.length > 0) {
+                                            handleTemplateAutocompleteSelect(filteredTemplateAutocomplete[0]);
+                                        } else if (filteredTemplateConditionalOptions.length > 0) {
+                                            // Select the first conditional option
+                                            const option = filteredTemplateConditionalOptions[0];
+                                            const beforeCursor = newMessage.substring(0, messageCursorPosition);
+                                            const afterCursor = newMessage.substring(messageCursorPosition);
+                                            const startPos = beforeCursor.lastIndexOf('@');
+                                            
+                                            let newValue, newCursorPos;
+                                            if (option.id === 'if') {
+                                                newValue = newMessage.substring(0, startPos) + '[if  = ]' + afterCursor;
+                                                newCursorPos = startPos + 4;
+                                            } else {
+                                                newValue = newMessage.substring(0, startPos) + '[endif]' + afterCursor;
+                                                newCursorPos = startPos + 7;
+                                            }
+                                            
+                                            setNewMessage(newValue);
+                                            
+                                            setTimeout(() => {
+                                                const textarea = document.querySelector('textarea[placeholder="Type your message..."]');
+                                                if (textarea) {
+                                                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                                                    textarea.focus();
+                                                }
+                                            }, 0);
+                                            
+                                            setShowTemplateAutocomplete(false);
+                                            setTemplateAutocompleteQuery("");
+                                        }
                                     }
                                     if (e.key === 'Escape') {
-                                        setShowVariableAutocomplete(false);
-                                        setVariableAutocompleteQuery("");
+                                        setShowTemplateAutocomplete(false);
+                                        setTemplateAutocompleteQuery("");
                                     }
                                     
-                                    // Handle variable picker (legacy)
-                                    if (showVariablePicker && filteredFields.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                    // Handle old autocomplete (legacy)
+                                    if (showAutocomplete && filteredTemplates.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
                                         e.preventDefault();
-                                        const selectedField = filteredFields[0];
-                                        setNewMessageEdit(prev => prev + `@${normalizeFieldName(selectedField.name)}`);
-                                        setShowVariablePicker(false);
-                                        setVariableQuery("");
+                                        handleTemplateSelect(filteredTemplates[0]);
                                     }
                                     if (e.key === 'Escape') {
-                                        setShowVariablePicker(false);
-                                        setVariableQuery("");
+                                        setShowAutocomplete(false);
                                     }
                                 }}
-                                onBlur={() => {
-                                    // Delay hiding autocomplete to allow for clicks on dropdown items
+                                onKeyPress={handleKeyPress}
+                                placeholder="Type your message..."
+                                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none overflow-hidden"
+                                rows="1"
+                                style={{
+                                    minHeight: '40px',
+                                    maxHeight: '120px',
+                                    height: 'auto'
+                                }}
+                                onInput={(e) => {
+                                    e.target.style.height = 'auto';
+                                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                                }}
+                                onBlur={() => { 
+                                    setShowTemplatePicker(false); 
+                                    setShowAutocomplete(false);
                                     setTimeout(() => {
-                                        setShowVariableAutocomplete(false);
-                                        setVariableAutocompleteQuery("");
+                                        setShowTemplateAutocomplete(false);
+                                        setTemplateAutocompleteQuery("");
                                     }, 150);
                                 }}
                             />
-                            <div className="absolute top-2 right-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setShowVariablePicker(!showVariablePicker)}
-                                    className="text-gray-500 hover:text-gray-700 p-1 rounded-md focus:outline-none text-sm font-bold"
-                                    title="Insert variable"
+                            {showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (
+                                <div
+                                    className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
                                 >
-                                    @
-                                </button>
-                            </div>
-                            {showVariablePicker && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[200px] max-h-48 overflow-y-auto">
-                                    <div className="p-2 border-b">
-                                        <input
-                                            type="text"
-                                            placeholder="Search fields..."
-                                            value={variableQuery}
-                                            onChange={(e) => setVariableQuery(e.target.value)}
-                                            className="w-full p-1 text-sm border rounded"
-                                            autoFocus
-                                        />
+                                    <div className="p-2 border-b bg-gray-50">
+                                        <div className="text-xs text-gray-600">Available templates:</div>
                                     </div>
-                                    {filteredFields.length === 0 ? (
-                                        <div className="p-2 text-sm text-gray-500">No fields found</div>
-                                    ) : (
-                                        filteredFields.map((field) => (
+                                    {filteredTemplateAutocomplete.map((template) => {
+                                        const resolvedTemplate = resolvedTemplates.find(rt => rt.id === template.id);
+                                        return (
                                             <button
-                                                key={field.id}
+                                                key={template.id}
                                                 className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
                                                 onMouseDown={() => {
-                                                    setNewMessageEdit(prev => prev + `@${normalizeFieldName(field.name)}`);
-                                                    setShowVariablePicker(false);
-                                                    setVariableQuery("");
+                                                    handleTemplateAutocompleteSelect(template);
+                                                    setShowTemplateAutocomplete(false);
+                                                    setTemplateAutocompleteQuery("");
                                                 }}
                                             >
-                                                <div className="font-medium">{field.name}</div>
-                                                <div className="text-xs text-gray-500">
-                                                    {field.type} • Use: @{normalizeFieldName(field.name)}
-                                                </div>
+                                                <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                                {resolvedTemplate && (
+                                                    <div className="text-xs text-gray-600 mt-1">
+                                                        {resolvedTemplate.resolvedMessage}
+                                                    </div>
+                                                )}
                                             </button>
-                                        ))
-                                    )}
+                                        );
+                                    })}
                                 </div>
                             )}
-                            {showVariableAutocomplete && filteredAutocompleteFields.length > 0 && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[250px] max-h-48 overflow-y-auto">
-                                    <div className="p-2 border-b bg-gray-50">
-                                        <div className="text-xs text-gray-600">Available variables:</div>
-                                    </div>
-                                    {filteredAutocompleteFields.map((field) => (
+                            {showAutocomplete && filteredTemplates.length > 0 && (
+                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[300px]">
+                                    {filteredTemplates.map((record) => (
                                         <button
-                                            key={field.id}
+                                            key={record.id}
                                             className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
-                                            onMouseDown={() => handleVariableAutocompleteSelect(field)}
+                                            onMouseDown={() => handleTemplateSelect(record)}
                                         >
-                                            <div className="font-medium">{field.name}</div>
-                                            <div className="text-xs text-gray-500">
-                                                {field.type} • @{normalizeFieldName(field.name)}
-                                            </div>
+                                            <div className="font-medium">{record.name}</div>
+                                            {selectedClient && record.message && (
+                                                <div className="text-xs text-gray-600 mt-1">
+                                                    {resolveTemplateVariables(record.message, selectedClient)}
+                                                </div>
+                                            )}
                                         </button>
                                     ))}
                                 </div>
@@ -805,6 +1002,103 @@ function SMSInterface() {
                                     <strong>Available fields:</strong> {availableFields.map(f => `${f.name} → @${normalizeFieldName(f.name)}`).join(', ')}
                                 </div>
                             )}
+                            
+                            {/* Conditional Logic Helpers */}
+                            <div className="mt-3 p-3 bg-yellow-50 rounded border-l-4 border-yellow-400">
+                                <div className="font-medium text-yellow-800 mb-2">Conditional Logic Helpers:</div>
+                                <div className="flex flex-wrap gap-2 mb-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const beforeCursor = newMessageEdit.substring(0, cursorPosition);
+                                            const afterCursor = newMessageEdit.substring(cursorPosition);
+                                            const newValue = beforeCursor + '[if  = ]' + afterCursor;
+                                            setNewMessageEdit(newValue);
+                                            
+                                            // Set cursor position after [if 
+                                            const newCursorPos = beforeCursor.length + 4;
+                                            setTimeout(() => {
+                                                const textarea = document.querySelector('textarea[value="' + newValue + '"]');
+                                                if (textarea) {
+                                                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                                                    textarea.focus();
+                                                }
+                                            }, 0);
+                                        }}
+                                        className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 border border-yellow-300 rounded hover:bg-yellow-200 transition-colors"
+                                        title="Insert conditional if statement"
+                                    >
+                                        @if
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const beforeCursor = newMessageEdit.substring(0, cursorPosition);
+                                            const afterCursor = newMessageEdit.substring(cursorPosition);
+                                            const newValue = beforeCursor + '[endif]' + afterCursor;
+                                            setNewMessageEdit(newValue);
+                                            
+                                            // Set cursor position after [endif]
+                                            const newCursorPos = beforeCursor.length + 7;
+                                            setTimeout(() => {
+                                                const textarea = document.querySelector('textarea[value="' + newValue + '"]');
+                                                if (textarea) {
+                                                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                                                    textarea.focus();
+                                                }
+                                            }, 0);
+                                        }}
+                                        className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 border border-yellow-300 rounded hover:bg-yellow-200 transition-colors"
+                                        title="Insert conditional end statement"
+                                    >
+                                        @endif
+                                    </button>
+                                </div>
+                                <div className="text-xs text-yellow-700">
+                                    <strong>Quick field selection:</strong> Click any field below to insert it into your conditional statement
+                                </div>
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                    {availableFields.slice(0, 8).map((field) => (
+                                        <button
+                                            key={field.id}
+                                            type="button"
+                                            onClick={() => insertConditionalWithField(field.name)}
+                                            className="px-2 py-1 text-xs bg-white text-yellow-700 border border-yellow-300 rounded hover:bg-yellow-50 transition-colors"
+                                            title={`Insert conditional with ${field.name} field`}
+                                        >
+                                            {field.name}
+                                        </button>
+                                    ))}
+                                    {availableFields.length > 8 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                // Show all fields in a dropdown or expand the list
+                                                const allFields = availableFields.map((field) => (
+                                                    <button
+                                                        key={field.id}
+                                                        type="button"
+                                                        onClick={() => insertConditionalWithField(field.name)}
+                                                        className="block w-full text-left px-3 py-2 text-xs bg-white text-yellow-700 border border-yellow-300 rounded hover:bg-yellow-50 transition-colors mb-1"
+                                                        title={`Insert conditional with ${field.name} field`}
+                                                    >
+                                                        {field.name}
+                                                    </button>
+                                                ));
+                                                
+                                                // For now, just show an alert with all field names
+                                                const fieldNames = availableFields.map(f => f.name).join('\n');
+                                                alert(`All available fields:\n\n${fieldNames}\n\nClick any field button above to insert it into a conditional statement.`);
+                                            }}
+                                            className="px-2 py-1 text-xs bg-yellow-100 text-yellow-700 border border-yellow-300 rounded hover:bg-yellow-200 transition-colors"
+                                            title="Show all available fields"
+                                        >
+                                            +{availableFields.length - 8} more
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                            
                             <div className="mt-2 p-2 bg-blue-50 rounded border-l-4 border-blue-400">
                                 <div className="font-medium text-blue-800 mb-1">Conditional Logic Examples:</div>
                                 <div className="text-xs text-blue-700 space-y-1">
@@ -937,7 +1231,7 @@ function SMSInterface() {
     }
     
     return (
-        <div className="h-screen flex flex-col">
+        <div className="min-h-screen flex flex-col" style={{ height: '100vh', minHeight: '800px' }}>
             {/* Header */}
             <div className="bg-white border-b border-gray-200 p-4">
                 <div className="flex justify-between items-center">
@@ -1066,7 +1360,7 @@ function SMSInterface() {
             </div>
             
             {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[300px] pb-16 bg-gray-50">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50" style={{ minHeight: '400px' }}>
                 {!selectedClientId ? (
                     <div className="text-center text-gray-500 mt-8">
                         <p>Select a client to start chatting</p>
@@ -1118,17 +1412,50 @@ function SMSInterface() {
             
             {/* Message Input */}
             {selectedClientId && (
-                <div className="border-t border-gray-200 p-4 mb-12">
+                <div className="border-t border-gray-200 p-4 bg-white">
                     <div className="flex space-x-2 items-end">
                         <div className="flex-1 relative">
                             <textarea
+                                ref={messageInputRef}
                                 value={newMessage}
                                 onChange={handleInput}
                                 onKeyDown={(e) => {
                                     // Handle new template autocomplete
-                                    if (showTemplateAutocomplete && filteredTemplateAutocomplete.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+                                    if (showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (e.key === 'Enter' || e.key === 'Tab')) {
                                         e.preventDefault();
-                                        handleTemplateAutocompleteSelect(filteredTemplateAutocomplete[0]);
+                                        
+                                        // If there are templates, select the first one
+                                        if (filteredTemplateAutocomplete.length > 0) {
+                                            handleTemplateAutocompleteSelect(filteredTemplateAutocomplete[0]);
+                                        } else if (filteredTemplateConditionalOptions.length > 0) {
+                                            // Select the first conditional option
+                                            const option = filteredTemplateConditionalOptions[0];
+                                            const beforeCursor = newMessage.substring(0, messageCursorPosition);
+                                            const afterCursor = newMessage.substring(messageCursorPosition);
+                                            const startPos = beforeCursor.lastIndexOf('@');
+                                            
+                                            let newValue, newCursorPos;
+                                            if (option.id === 'if') {
+                                                newValue = newMessage.substring(0, startPos) + '[if  = ]' + afterCursor;
+                                                newCursorPos = startPos + 4;
+                                            } else {
+                                                newValue = newMessage.substring(0, startPos) + '[endif]' + afterCursor;
+                                                newCursorPos = startPos + 7;
+                                            }
+                                            
+                                            setNewMessage(newValue);
+                                            
+                                            setTimeout(() => {
+                                                const textarea = document.querySelector('textarea[placeholder="Type your message..."]');
+                                                if (textarea) {
+                                                    textarea.setSelectionRange(newCursorPos, newCursorPos);
+                                                    textarea.focus();
+                                                }
+                                            }, 0);
+                                            
+                                            setShowTemplateAutocomplete(false);
+                                            setTemplateAutocompleteQuery("");
+                                        }
                                     }
                                     if (e.key === 'Escape') {
                                         setShowTemplateAutocomplete(false);
@@ -1160,15 +1487,16 @@ function SMSInterface() {
                                 onBlur={() => { 
                                     setShowTemplatePicker(false); 
                                     setShowAutocomplete(false);
-                                    // Delay hiding template autocomplete to allow for clicks on dropdown items
                                     setTimeout(() => {
                                         setShowTemplateAutocomplete(false);
                                         setTemplateAutocompleteQuery("");
                                     }, 150);
                                 }}
                             />
-                            {showTemplateAutocomplete && filteredTemplateAutocomplete.length > 0 && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto">
+                            {showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (
+                                <div
+                                    className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
+                                >
                                     <div className="p-2 border-b bg-gray-50">
                                         <div className="text-xs text-gray-600">Available templates:</div>
                                     </div>
@@ -1178,7 +1506,11 @@ function SMSInterface() {
                                             <button
                                                 key={template.id}
                                                 className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
-                                                onMouseDown={() => handleTemplateAutocompleteSelect(template)}
+                                                onMouseDown={() => {
+                                                    handleTemplateAutocompleteSelect(template);
+                                                    setShowTemplateAutocomplete(false);
+                                                    setTemplateAutocompleteQuery("");
+                                                }}
                                             >
                                                 <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
                                                 {resolvedTemplate && (
@@ -1189,24 +1521,6 @@ function SMSInterface() {
                                             </button>
                                         );
                                     })}
-                                </div>
-                            )}
-                            {showAutocomplete && filteredTemplates.length > 0 && (
-                                <div className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[300px]">
-                                    {filteredTemplates.map((record) => (
-                                        <button
-                                            key={record.id}
-                                            className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
-                                            onMouseDown={() => handleTemplateSelect(record)}
-                                        >
-                                            <div className="font-medium">{record.name}</div>
-                                            {selectedClient && record.message && (
-                                                <div className="text-xs text-gray-600 mt-1">
-                                                    {resolveTemplateVariables(record.message, selectedClient)}
-                                                </div>
-                                            )}
-                                        </button>
-                                    ))}
                                 </div>
                             )}
                         </div>
