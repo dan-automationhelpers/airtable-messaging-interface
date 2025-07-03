@@ -1,4 +1,4 @@
-import {initializeBlock, useBase, useRecords, useGlobalConfig, useWatchable, useCustomProperties} from '@airtable/blocks/interface/ui';
+import {initializeBlock, useBase, useRecords, useGlobalConfig, useWatchable, useCustomProperties, expandRecord} from '@airtable/blocks/interface/ui';
 import {useState, useEffect, useRef, useMemo} from 'react';
 import './style.css';
 
@@ -1349,12 +1349,49 @@ function SMSInterface() {
                 
                 {selectedClient && (
                     <div className="mt-3 p-3 bg-blue-50 rounded-md">
-                        <p className="text-sm font-medium text-blue-800">
-                            Chatting with: {selectedClient.getCellValue('Name') || selectedClient.getCellValue('Client Name') || `Client ${selectedClient.id}`}
-                        </p>
-                        <p className="text-xs text-blue-600">
-                            Phone: {selectedClient.getCellValue('Phone') || 'Not specified'}
-                        </p>
+                        <div className="flex items-center space-x-3">
+                            <div className="flex-shrink-0">
+                                {(() => {
+                                    const profilePhoto = selectedClient.getCellValue('Profile Photo');
+                                    if (profilePhoto && Array.isArray(profilePhoto) && profilePhoto.length > 0) {
+                                        const photoUrl = profilePhoto[0].url;
+                                        return (
+                                            <img 
+                                                src={photoUrl} 
+                                                alt="Profile" 
+                                                className="w-12 h-12 rounded-full object-cover border-2 border-blue-200"
+                                                onError={(e) => {
+                                                    e.target.style.display = 'none';
+                                                    e.target.nextSibling.style.display = 'flex';
+                                                }}
+                                            />
+                                        );
+                                    }
+                                    return (
+                                        <div className="w-12 h-12 rounded-full bg-blue-200 flex items-center justify-center border-2 border-blue-300">
+                                            <span className="text-blue-600 font-semibold text-lg">
+                                                {(selectedClient.getCellValue('Name') || selectedClient.getCellValue('Client Name') || 'C').charAt(0).toUpperCase()}
+                                            </span>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                            <div className="flex-1">
+                                <p className="text-sm font-medium text-blue-800">
+                                    Chatting with: {' '}
+                                    <button
+                                        onClick={() => expandRecord(selectedClient)}
+                                        className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                        title="Click to view client details"
+                                    >
+                                        {selectedClient.getCellValue('Name') || selectedClient.getCellValue('Client Name') || `Client ${selectedClient.id}`}
+                                    </button>
+                                </p>
+                                <p className="text-xs text-blue-600">
+                                    Phone: {selectedClient.getCellValue('Phone') || 'Not specified'}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
