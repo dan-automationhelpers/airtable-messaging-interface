@@ -1,10 +1,11 @@
-import {initializeBlock, useBase, useRecords, useGlobalConfig, useWatchable, useCustomProperties, expandRecord} from '@airtable/blocks/interface/ui';
+import {initializeBlock, useBase, useRecords, useGlobalConfig, useWatchable, useCustomProperties, expandRecord, useColorScheme} from '@airtable/blocks/interface/ui';
 import {useState, useEffect, useRef, useMemo} from 'react';
 import './style.css';
 
 function SMSInterface() {
     const base = useBase();
     const globalConfig = useGlobalConfig();
+    const {colorScheme} = useColorScheme();
     const customProps = useCustomProperties(
         () => [
             {
@@ -948,26 +949,26 @@ function SMSInterface() {
                             />
                             {showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (
                                 <div
-                                    className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
+                                    className="absolute left-0 mt-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
                                 >
-                                    <div className="p-2 border-b bg-gray-50">
-                                        <div className="text-xs text-gray-600">Available templates:</div>
+                                    <div className="p-2 border-b bg-gray-50 dark:bg-gray-700">
+                                        <div className="text-xs text-gray-600 dark:text-gray-400">Available templates:</div>
                                     </div>
                                     {filteredTemplateAutocomplete.map((template) => {
                                         const resolvedTemplate = resolvedTemplates.find(rt => rt.id === template.id);
                                         return (
                                             <button
                                                 key={template.id}
-                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm border-b last:border-b-0 text-gray-900 dark:text-gray-100"
                                                 onMouseDown={() => {
                                                     handleTemplateAutocompleteSelect(template);
                                                     setShowTemplateAutocomplete(false);
                                                     setTemplateAutocompleteQuery("");
                                                 }}
                                             >
-                                                <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                                <div className="font-medium">{template.name || <span className="italic text-gray-400 dark:text-gray-500">(Untitled)</span>}</div>
                                                 {resolvedTemplate && (
-                                                    <div className="text-xs text-gray-600 mt-1">
+                                                    <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                                                         {resolvedTemplate.resolvedMessage}
                                                     </div>
                                                 )}
@@ -1231,19 +1232,19 @@ function SMSInterface() {
     }
     
     return (
-        <div className="min-h-screen flex flex-col" style={{ height: '100vh', minHeight: '800px' }}>
+        <div className={`min-h-screen flex flex-col ${colorScheme === 'dark' ? 'dark' : ''}`} style={{ height: '100vh', minHeight: '800px' }}>
             {/* Header */}
-            <div className="bg-white border-b border-gray-200 p-4">
+            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
                 <div className="flex justify-between items-center">
                     <div>
-                        <h1 className="text-xl font-semibold text-gray-800">SMS Chat Interface</h1>
-                        <p className="text-sm text-gray-600">Manage client communications</p>
+                        <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">SMS Chat Interface</h1>
+                        <p className="text-sm text-gray-600 dark:text-gray-400">Manage client communications</p>
                     </div>
                     {allowDebugging && (
                         <div className="flex space-x-2">
                             <button
                                 onClick={() => setShowDebugPanel(!showDebugPanel)}
-                                className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded-md"
+                                className="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md"
                             >
                                 {showDebugPanel ? 'Hide Debug' : 'Show Debug'}
                             </button>
@@ -1254,7 +1255,7 @@ function SMSInterface() {
             
             {/* Debug Panel */}
             {allowDebugging && showDebugPanel && (
-                <div className="bg-gray-900 text-green-400 p-4 font-mono text-xs max-h-64 overflow-y-auto">
+                <div className="bg-gray-900 dark:bg-black text-green-400 p-4 font-mono text-xs max-h-64 overflow-y-auto">
                     <div className="flex justify-between items-center mb-2">
                         <div className="font-semibold">Debug Logs:</div>
                         <button
@@ -1277,7 +1278,7 @@ function SMSInterface() {
                                     button.className = 'px-2 py-1 text-xs bg-green-600 text-white rounded transition-colors';
                                     setTimeout(() => {
                                         button.textContent = originalText;
-                                        button.className = 'px-2 py-1 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition-colors';
+                                        button.className = 'px-2 py-1 text-xs bg-gray-700 dark:bg-gray-600 text-gray-300 rounded hover:bg-gray-600 dark:hover:bg-gray-500 transition-colors';
                                     }, 1000);
                                 } catch (err) {
                                     console.error('Failed to copy debug logs:', err);
@@ -1302,24 +1303,24 @@ function SMSInterface() {
                                     button.className = 'px-2 py-1 text-xs bg-green-600 text-white rounded transition-colors';
                                     setTimeout(() => {
                                         button.textContent = originalText;
-                                        button.className = 'px-2 py-1 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition-colors';
+                                        button.className = 'px-2 py-1 text-xs bg-gray-700 dark:bg-gray-600 text-gray-300 rounded hover:bg-gray-600 dark:hover:bg-gray-500 transition-colors';
                                     }, 1000);
                                 }
                             }}
-                            className="px-2 py-1 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600 transition-colors"
+                            className="px-2 py-1 text-xs bg-gray-700 dark:bg-gray-600 text-gray-300 rounded hover:bg-gray-600 dark:hover:bg-gray-500 transition-colors"
                             title="Copy debug logs to clipboard"
                         >
                             📋
                         </button>
                     </div>
                     {debugLogs.length === 0 ? (
-                        <div className="text-gray-500">No debug logs yet. Select a client to see API activity.</div>
+                        <div className="text-gray-500 dark:text-gray-400">No debug logs yet. Select a client to see API activity.</div>
                     ) : (
                         debugLogs.map((log, index) => (
                             <div key={index} className="mb-1">
-                                <span className="text-gray-500">[{log.timestamp}]</span> {log.message}
+                                <span className="text-gray-500 dark:text-gray-400">[{log.timestamp}]</span> {log.message}
                                 {log.data && (
-                                    <pre className="mt-1 text-xs bg-gray-800 p-2 rounded overflow-x-auto">
+                                    <pre className="mt-1 text-xs bg-gray-800 dark:bg-gray-900 p-2 rounded overflow-x-auto">
                                         {typeof log.data === 'object' ? JSON.stringify(log.data, null, 2) : log.data}
                                     </pre>
                                 )}
@@ -1330,14 +1331,14 @@ function SMSInterface() {
             )}
             
             {/* Client Picker */}
-            <div className="bg-white border-b border-gray-200 p-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Select Client
                 </label>
                 <select
                     value={selectedClientId || ''}
                     onChange={(e) => setSelectedClientId(e.target.value)}
-                    className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 >
                     <option value="">Choose a client...</option>
                     {clientsRecords?.map(record => (
@@ -1348,7 +1349,7 @@ function SMSInterface() {
                 </select>
                 
                 {selectedClient && (
-                    <div className="mt-3 p-3 bg-blue-50 rounded-md">
+                    <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md">
                         <div className="flex items-center space-x-3">
                             <div className="flex-shrink-0">
                                 {(() => {
@@ -1359,7 +1360,7 @@ function SMSInterface() {
                                             <img 
                                                 src={photoUrl} 
                                                 alt="Profile" 
-                                                className="w-12 h-12 rounded-full object-cover border-2 border-blue-200"
+                                                className="w-12 h-12 rounded-full object-cover border-2 border-blue-200 dark:border-blue-600"
                                                 onError={(e) => {
                                                     e.target.style.display = 'none';
                                                     e.target.nextSibling.style.display = 'flex';
@@ -1368,8 +1369,8 @@ function SMSInterface() {
                                         );
                                     }
                                     return (
-                                        <div className="w-12 h-12 rounded-full bg-blue-200 flex items-center justify-center border-2 border-blue-300">
-                                            <span className="text-blue-600 font-semibold text-lg">
+                                        <div className="w-12 h-12 rounded-full bg-blue-200 dark:bg-blue-600 flex items-center justify-center border-2 border-blue-300 dark:border-blue-500">
+                                            <span className="text-blue-600 dark:text-blue-200 font-semibold text-lg">
                                                 {(selectedClient.getCellValue('Name') || selectedClient.getCellValue('Client Name') || 'C').charAt(0).toUpperCase()}
                                             </span>
                                         </div>
@@ -1377,17 +1378,17 @@ function SMSInterface() {
                                 })()}
                             </div>
                             <div className="flex-1">
-                                <p className="text-sm font-medium text-blue-800">
+                                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
                                     Chatting with: {' '}
                                     <button
                                         onClick={() => expandRecord(selectedClient)}
-                                        className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                        className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline cursor-pointer"
                                         title="Click to view client details"
                                     >
                                         {selectedClient.getCellValue('Name') || selectedClient.getCellValue('Client Name') || `Client ${selectedClient.id}`}
                                     </button>
                                 </p>
-                                <p className="text-xs text-blue-600">
+                                <p className="text-xs text-blue-600 dark:text-blue-400">
                                     Phone: {selectedClient.getCellValue('Phone') || 'Not specified'}
                                 </p>
                             </div>
@@ -1397,13 +1398,13 @@ function SMSInterface() {
             </div>
             
             {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50" style={{ minHeight: '400px' }}>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-900" style={{ minHeight: '400px' }}>
                 {!selectedClientId ? (
-                    <div className="text-center text-gray-500 mt-8">
+                    <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
                         <p>Select a client to start chatting</p>
                     </div>
                 ) : isLoading ? (
-                    <div className="text-center text-gray-500 mt-8">
+                    <div className="text-center text-gray-500 dark:text-gray-400 mt-8">
                         <p>Loading messages...</p>
                     </div>
                 ) : (
@@ -1416,12 +1417,12 @@ function SMSInterface() {
                                 className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl shadow-sm ${
                                     message.sender === 'agent'
                                         ? 'bg-blue-500 text-white rounded-br-md'
-                                        : 'bg-white text-gray-800 border border-gray-200 rounded-bl-md'
+                                        : 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-600 rounded-bl-md'
                                 }`}
                             >
                                 <p className="text-sm leading-relaxed">{message.text}</p>
                                 <p className={`text-xs mt-2 ${
-                                    message.sender === 'agent' ? 'text-blue-100' : 'text-gray-400'
+                                    message.sender === 'agent' ? 'text-blue-100' : 'text-gray-400 dark:text-gray-500'
                                 }`}>
                                     {formatTime(message.timestamp)}
                                     {message.status && message.sender === 'agent' && (
@@ -1430,7 +1431,7 @@ function SMSInterface() {
                                          (message.status === 'delivered' && 
                                           Date.now() - message.timestamp.getTime() < 30000)) && (
                                             <span className={`ml-2 ${
-                                                message.sender === 'agent' ? 'text-blue-200' : 'text-gray-400'
+                                                message.sender === 'agent' ? 'text-blue-200' : 'text-gray-400 dark:text-gray-500'
                                             }`}>
                                                 • {message.status === 'queued' && '⏳ '}
                                                 {message.status === 'delivered' && '✓ '}
@@ -1449,7 +1450,7 @@ function SMSInterface() {
             
             {/* Message Input */}
             {selectedClientId && (
-                <div className="border-t border-gray-200 p-4 bg-white">
+                <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-800">
                     <div className="flex space-x-2 items-end">
                         <div className="flex-1 relative">
                             <textarea
@@ -1510,7 +1511,7 @@ function SMSInterface() {
                                 }}
                                 onKeyPress={handleKeyPress}
                                 placeholder="Type your message..."
-                                className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none overflow-hidden"
+                                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none overflow-hidden bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                                 rows="1"
                                 style={{
                                     minHeight: '40px',
@@ -1532,26 +1533,26 @@ function SMSInterface() {
                             />
                             {showTemplateAutocomplete && (filteredTemplateAutocomplete.length > 0 || templateAutocompleteQuery === '') && (
                                 <div
-                                    className="absolute left-0 mt-2 bg-white border border-gray-300 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
+                                    className="absolute left-0 mt-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded shadow-lg z-30 min-w-[350px] max-h-64 overflow-y-auto"
                                 >
-                                    <div className="p-2 border-b bg-gray-50">
-                                        <div className="text-xs text-gray-600">Available templates:</div>
+                                    <div className="p-2 border-b bg-gray-50 dark:bg-gray-700">
+                                        <div className="text-xs text-gray-600 dark:text-gray-400">Available templates:</div>
                                     </div>
                                     {filteredTemplateAutocomplete.map((template) => {
                                         const resolvedTemplate = resolvedTemplates.find(rt => rt.id === template.id);
                                         return (
                                             <button
                                                 key={template.id}
-                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-sm border-b last:border-b-0"
+                                                className="block w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-sm border-b last:border-b-0 text-gray-900 dark:text-gray-100"
                                                 onMouseDown={() => {
                                                     handleTemplateAutocompleteSelect(template);
                                                     setShowTemplateAutocomplete(false);
                                                     setTemplateAutocompleteQuery("");
                                                 }}
                                             >
-                                                <div className="font-medium">{template.name || <span className="italic text-gray-400">(Untitled)</span>}</div>
+                                                <div className="font-medium">{template.name || <span className="italic text-gray-400 dark:text-gray-500">(Untitled)</span>}</div>
                                                 {resolvedTemplate && (
-                                                    <div className="text-xs text-gray-600 mt-1">
+                                                    <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                                                         {resolvedTemplate.resolvedMessage}
                                                     </div>
                                                 )}
